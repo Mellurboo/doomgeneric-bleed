@@ -23,7 +23,6 @@ CFLAGS := \
 	-nostdlib \
 	-nostdinc \
 	-no-pie \
-	-lm \
 	-mavx2 \
 	$(INCLUDES)
 
