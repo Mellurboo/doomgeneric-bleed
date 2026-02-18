@@ -1,0 +1,4 @@
+make clean
+make all
+
+cp bin/doom ~/git/Bleed-Kernel/initrd/bin/
