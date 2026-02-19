@@ -11,4 +11,7 @@ Release/
 Build/
 doomgeneric.map
 
+sysroot/
+external/
+
 bin/
