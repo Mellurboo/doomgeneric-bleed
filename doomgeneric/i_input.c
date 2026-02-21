@@ -281,6 +281,9 @@ void I_GetEvent(void)
     event_t event;
     int pressed;
     unsigned char key;
+    int buttons;
+    int dx;
+    int dy;
 
     
 	while (DG_GetKey(&pressed, &key))
@@ -323,6 +326,16 @@ void I_GetEvent(void)
         }
     }
 
+    while (DG_GetMouse(&buttons, &dx, &dy))
+    {
+        event.type = ev_mouse;
+        event.data1 = buttons;
+        event.data2 = dx;
+        event.data3 = dy;
+        event.data4 = 0;
+        D_PostEvent(&event);
+    }
+
 
                 /*
             case SDL_MOUSEMOTION:
@@ -338,4 +351,3 @@ void I_GetEvent(void)
 void I_InitInput(void)
 {
 }
-

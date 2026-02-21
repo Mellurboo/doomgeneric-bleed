@@ -26,15 +26,61 @@
 #define TTY_IOCTL_SET_FLAGS  0x5402
 #define TTY_FLAGS_DOOM (TTY_NONBLOCK)
 
+#ifndef DG_HAS_MOUSE_HEADER
+typedef struct {
+    int16_t dx;
+    int16_t dy;
+    int8_t wheel;
+    uint8_t buttons;
+} mouse_event_t;
+#endif
+
+#ifndef MOUSE_BTN_LEFT
+#define MOUSE_BTN_LEFT   (1 << 0)
+#define MOUSE_BTN_RIGHT  (1 << 1)
+#define MOUSE_BTN_MIDDLE (1 << 2)
+#endif
+
 static uint32_t* fb0;
 static uint32_t fb_pitch_pixels;
 static struct fb_info fb_info_local;
 static int tty_fd = -1;
+static int mouse_fd = -1;
 
-static keyboard_event_t event;
+static keyboard_event_t key_event;
 static uint64_t start_fs = 0;
+static int mouse_debug_dx = 0;
+static int mouse_debug_dy = 0;
+static int mouse_debug_buttons = 0;
+static uint64_t mouse_debug_last_fs = 0;
 
-static const uint8_t font8x8[15][8] = {
+//crude font
+
+enum {
+    FONT_0 = 0,
+    FONT_1,
+    FONT_2,
+    FONT_3,
+    FONT_4,
+    FONT_5,
+    FONT_6,
+    FONT_7,
+    FONT_8,
+    FONT_9,
+    FONT_F,
+    FONT_P,
+    FONT_S,
+    FONT_COLON,
+    FONT_DOT,
+    FONT_MINUS,
+    FONT_M,
+    FONT_X,
+    FONT_Y,
+    FONT_B,
+    FONT_GLYPH_COUNT
+};
+
+static const uint8_t font8x8[FONT_GLYPH_COUNT][8] = {
     {0x3C, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C},
     {0x08, 0x18, 0x08, 0x08, 0x08, 0x08, 0x08, 0x1C},
     {0x3C, 0x42, 0x02, 0x02, 0x3C, 0x40, 0x40, 0x7E},
@@ -49,13 +95,36 @@ static const uint8_t font8x8[15][8] = {
     {0x7C, 0x42, 0x42, 0x7C, 0x40, 0x40, 0x40, 0x40},
     {0x3E, 0x40, 0x40, 0x3C, 0x02, 0x02, 0x02, 0x7C},
     {0x00, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x00},
-    {0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00}
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00},
+    {0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x00},
+    {0x42, 0x66, 0x5A, 0x42, 0x42, 0x42, 0x42, 0x42},
+    {0x42, 0x24, 0x18, 0x18, 0x18, 0x18, 0x24, 0x42},
+    {0x42, 0x24, 0x18, 0x18, 0x08, 0x08, 0x08, 0x08},
+    {0x7C, 0x42, 0x42, 0x7C, 0x42, 0x42, 0x42, 0x7C}
 };
 
-static void draw_fps_digit(int x, int y, int digit, uint32_t color) {
+static int front_glyph_for_char(char ch) {
+    if (ch >= '0' && ch <= '9') return FONT_0 + (ch - '0');
+    if (ch == 'F') return FONT_F;
+    if (ch == 'P') return FONT_P;
+    if (ch == 'S') return FONT_S;
+    if (ch == ':') return FONT_COLON;
+    if (ch == '.') return FONT_DOT;
+    if (ch == '-') return FONT_MINUS;
+    if (ch == 'M') return FONT_M;
+    if (ch == 'X') return FONT_X;
+    if (ch == 'Y') return FONT_Y;
+    if (ch == 'B') return FONT_B;
+    return -1;
+}
+
+static void draw_front_glyph(int x, int y, int glyph, uint32_t color) {
+    if (glyph < 0 || glyph >= FONT_GLYPH_COUNT)
+        return;
+
     for (int i = 0; i < 8; i++) {
         for (int j = 0; j < 8; j++) {
-            if (font8x8[digit][i] & (1 << (7 - j))) {
+            if (font8x8[glyph][i] & (1 << (7 - j))) {
                 int tx = x + j;
                 int ty = y + i;
                 if (tx < DOOMGENERIC_RESX && ty < DOOMGENERIC_RESY) {
@@ -64,6 +133,53 @@ static void draw_fps_digit(int x, int y, int digit, uint32_t color) {
             }
         }
     }
+}
+
+static void draw_front_text(int x, int y, const char *text, uint32_t color) {
+    int cx = x;
+    while (*text) {
+        int glyph = front_glyph_for_char(*text++);
+        if (glyph >= 0) {
+            draw_front_glyph(cx, y, glyph, color);
+        }
+        cx += 8;
+    }
+}
+
+static int draw_front_unsigned(int x, int y, uint32_t value, uint32_t color) {
+    char digits[10];
+    int count = 0;
+
+    if (value == 0) {
+        draw_front_glyph(x, y, FONT_0, color);
+        return 8;
+    }
+
+    while (value > 0 && count < (int)sizeof(digits)) {
+        digits[count++] = (char)('0' + (value % 10));
+        value /= 10;
+    }
+
+    for (int i = count - 1; i >= 0; i--) {
+        draw_front_glyph(x, y, FONT_0 + (digits[i] - '0'), color);
+        x += 8;
+    }
+
+    return count * 8;
+}
+
+static int draw_front_signed(int x, int y, int value, uint32_t color) {
+    int width = 0;
+
+    if (value < 0) {
+        draw_front_glyph(x, y, FONT_MINUS, color);
+        x += 8;
+        width += 8;
+        value = -value;
+    }
+
+    width += draw_front_unsigned(x, y, (uint32_t)value, color);
+    return width;
 }
 
 static unsigned char map_key(const keyboard_event_t* ev)
@@ -115,6 +231,7 @@ void DG_Init(void)
     tty_fd = _open("/dev/tty0", O_RDWR);
     if (tty_fd >= 0) _ioctl(tty_fd, TTY_IOCTL_SET_FLAGS, &flags);
     _ioctl(0, TTY_IOCTL_SET_FLAGS, &flags);
+    mouse_fd = _open("/dev/mouse0", O_RDONLY);
 
     int framebuffer = _open("/dev/fb0", O_RDWR);
     if (framebuffer < 0) { fb0 = NULL; return; }
@@ -160,12 +277,32 @@ void DG_DrawFrame(void)
     // UI Drawing
     uint32_t fps_int = fps_scaled / 10;
     uint32_t color = 0xFFFFFF;
-    draw_fps_digit(5, 5, 10, color);
-    draw_fps_digit(13, 5, 11, color);
-    draw_fps_digit(21, 5, 12, color);
+    draw_front_glyph(5, 5, FONT_F, color);
+    draw_front_glyph(13, 5, FONT_P, color);
+    draw_front_glyph(21, 5, FONT_S, color);
     color = (fps_int < 20) ? 0xCC0000 : (fps_int < 40 ? 0xCCCC00 : 0x00CC00);
-    draw_fps_digit(45, 5, (fps_int / 10) % 10, color);
-    draw_fps_digit(53, 5, fps_int % 10, color);
+    draw_front_glyph(45, 5, FONT_0 + ((fps_int / 10) % 10), color);
+    draw_front_glyph(53, 5, FONT_0 + (fps_int % 10), color);
+
+    // mouse debug, i wont need this forever but itll sit here for now, maybe use a preprocessor to disable it?
+    uint32_t mouse_color = 0x666666;
+    if (mouse_debug_last_fs != 0 && (current_fs_now - mouse_debug_last_fs) < (femtosecondsPerSecond / 4))
+        mouse_color = 0x55CCFF;
+
+    int cx = 5;
+    draw_front_text(cx, 17, "M", mouse_color);
+    cx += 8;
+    draw_front_text(cx, 17, "B:", mouse_color);
+    cx += 16;
+    cx += draw_front_unsigned(cx, 17, (uint32_t)(mouse_debug_buttons & 0x7), mouse_color);
+    cx += 8;
+    draw_front_text(cx, 17, "X:", mouse_color);
+    cx += 16;
+    cx += draw_front_signed(cx, 17, mouse_debug_dx, mouse_color);
+    cx += 8;
+    draw_front_text(cx, 17, "Y:", mouse_color);
+    cx += 16;
+    draw_front_signed(cx, 17, mouse_debug_dy, mouse_color);
 
     uint32_t sw = fb_info_local.width;
     uint32_t sh = fb_info_local.height;
@@ -221,11 +358,37 @@ uint32_t DG_GetTicksMs(void) {
 }
 
 int DG_GetKey(int* pressed, unsigned char* doomKey) {
-    if (_read(0, &event, sizeof(event)) != (int)sizeof(event)) return 0;
-    unsigned char key = map_key(&event);
+    if (_read(0, &key_event, sizeof(key_event)) != (int)sizeof(key_event)) return 0;
+    unsigned char key = map_key(&key_event);
     if (key == 0) return 0;
-    *pressed = (event.action != KEY_RELEASE);
+    *pressed = (key_event.action != KEY_RELEASE);
     *doomKey = key;
+    return 1;
+}
+
+int DG_GetMouse(int *buttons, int *dx, int *dy) {
+    mouse_event_t mouse_event;
+    int doom_buttons = 0;
+
+    if (!buttons || !dx || !dy || mouse_fd < 0)
+        return 0;
+
+    if (_read(mouse_fd, &mouse_event, sizeof(mouse_event)) != (int)sizeof(mouse_event))
+        return 0;
+
+    if (mouse_event.buttons & MOUSE_BTN_LEFT) doom_buttons |= 1;
+    if (mouse_event.buttons & MOUSE_BTN_RIGHT) doom_buttons |= 2;
+    if (mouse_event.buttons & MOUSE_BTN_MIDDLE) doom_buttons |= 4;
+
+    *buttons = doom_buttons;
+    *dx = (int)mouse_event.dx;
+    *dy = (int)mouse_event.dy;
+
+    mouse_debug_buttons = doom_buttons;
+    mouse_debug_dx = *dx;
+    mouse_debug_dy = *dy;
+    mouse_debug_last_fs = _femtoseconds();
+
     return 1;
 }
 
