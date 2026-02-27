@@ -9,7 +9,6 @@
 #include <syscalls/open.h>
 #include <syscalls/read.h>
 #include <syscalls/ioctl.h>
-#include <syscalls/mapfb.h>
 #include <devices/hpet.h>
 #include <graphics/display.h>
 #include <string.h>
@@ -47,6 +46,7 @@ static struct fb_info fb_info_local;
 static int tty_fd = -1;
 static int mouse_fd = -1;
 static int hpet_fd = -2;
+static int fb_fd = -1;
 
 static keyboard_event_t key_event;
 static uint64_t start_fs = 0;
@@ -250,12 +250,11 @@ void DG_Init(void)
     _ioctl(0, TTY_IOCTL_SET_FLAGS, &flags);
     mouse_fd = _open("/dev/mouse0", O_RDONLY);
 
-    int framebuffer = _open("/dev/fb0", O_RDWR);
-    if (framebuffer < 0) { fb0 = NULL; return; }
-    if (_ioctl(framebuffer, FB_IOC_GET_INFO, &fb_info_local) < 0) { fb0 = NULL; return; }
+    fb_fd = _open("/dev/fb0", O_RDWR);
+    if (fb_fd < 0) { fb0 = NULL; return; }
+    if (_ioctl(fb_fd, FB_IOC_GET_INFO, &fb_info_local) < 0) { fb0 = NULL; return; }
 
-    size_t outpages;
-    fb0 = (uint32_t*)mapfb(&outpages);
+    fb0 = (uint32_t*)malloc(fb_info_local.height * fb_info_local.pitch);
     fb_pitch_pixels = fb_info_local.pitch >> 2;
     start_fs = dg_now_fs();
     
@@ -364,6 +363,10 @@ void DG_DrawFrame(void)
         
         memcpy(dst + ox, line_buf + ox, rw * sizeof(uint32_t));
     }
+
+    if (fb_fd >= 0) {
+        _ioctl(fb_fd, FB_IOC_FLIP, fb0);
+    }
 }
 
 void DG_SleepMs(uint32_t ms) {
@@ -372,7 +375,9 @@ void DG_SleepMs(uint32_t ms) {
         return;
 
     uint64_t target = start + (uint64_t)ms * femtosecondsPerMillisecond;
-    while (dg_now_fs() < target) { }
+    while (dg_now_fs() < target) {
+        for (volatile int i = 0; i < 500; i++);
+    }
 }
 
 uint32_t DG_GetTicksMs(void) {
