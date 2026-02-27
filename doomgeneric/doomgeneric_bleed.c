@@ -10,7 +10,7 @@
 #include <syscalls/read.h>
 #include <syscalls/ioctl.h>
 #include <syscalls/mapfb.h>
-#include <syscalls/femtoseconds.h>
+#include <devices/hpet.h>
 #include <graphics/display.h>
 #include <string.h>
 #include <stdio.h>
@@ -46,6 +46,7 @@ static uint32_t fb_pitch_pixels;
 static struct fb_info fb_info_local;
 static int tty_fd = -1;
 static int mouse_fd = -1;
+static int hpet_fd = -2;
 
 static keyboard_event_t key_event;
 static uint64_t start_fs = 0;
@@ -53,6 +54,20 @@ static int mouse_debug_dx = 0;
 static int mouse_debug_dy = 0;
 static int mouse_debug_buttons = 0;
 static uint64_t mouse_debug_last_fs = 0;
+
+static uint64_t dg_now_fs(void)
+{
+    uint64_t now = 0;
+
+    if (hpet_fd == -2)
+        hpet_fd = _open("/dev/hpet", O_RDONLY);
+    if (hpet_fd < 0)
+        return 0;
+
+    if (_ioctl(hpet_fd, HPET_IOCTL_GET_FEMTOSECONDS, &now) == 0)
+        return now;
+    return 0;
+}
 
 //crude font
 
@@ -240,7 +255,7 @@ void DG_Init(void)
     size_t outpages;
     fb0 = (uint32_t*)mapfb(&outpages);
     fb_pitch_pixels = fb_info_local.pitch >> 2;
-    start_fs = _femtoseconds();
+    start_fs = dg_now_fs();
     
     // Clear screen once to black
     memset(fb0, 0, fb_info_local.height * fb_info_local.pitch);
@@ -257,7 +272,7 @@ void DG_DrawFrame(void)
     static uint64_t rolling_sum = 0;
     static int sample_count = 0;
     static uint64_t last_frame_fs = 0;
-    uint64_t current_fs_now = _femtoseconds();
+    uint64_t current_fs_now = dg_now_fs();
     uint32_t fps_scaled = 0;
 
     if (last_frame_fs != 0) {
@@ -349,12 +364,12 @@ void DG_DrawFrame(void)
 }
 
 void DG_SleepMs(uint32_t ms) {
-    uint64_t target = _femtoseconds() + (uint64_t)ms * femtosecondsPerMillisecond;
-    while (_femtoseconds() < target) { }
+    uint64_t target = dg_now_fs() + (uint64_t)ms * femtosecondsPerMillisecond;
+    while (dg_now_fs() < target) { }
 }
 
 uint32_t DG_GetTicksMs(void) {
-    return (uint32_t)((_femtoseconds() - start_fs) / femtosecondsPerMillisecond);
+    return (uint32_t)((dg_now_fs() - start_fs) / femtosecondsPerMillisecond);
 }
 
 int DG_GetKey(int* pressed, unsigned char* doomKey) {
@@ -387,7 +402,7 @@ int DG_GetMouse(int *buttons, int *dx, int *dy) {
     mouse_debug_buttons = doom_buttons;
     mouse_debug_dx = *dx;
     mouse_debug_dy = *dy;
-    mouse_debug_last_fs = _femtoseconds();
+    mouse_debug_last_fs = dg_now_fs();
 
     return 1;
 }
