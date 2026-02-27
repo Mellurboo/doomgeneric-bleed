@@ -66,6 +66,8 @@ static uint64_t dg_now_fs(void)
 
     if (_ioctl(hpet_fd, HPET_IOCTL_GET_FEMTOSECONDS, &now) == 0)
         return now;
+    if (_read(hpet_fd, &now, sizeof(now)) == (long)sizeof(now))
+        return now;
     return 0;
 }
 
@@ -284,7 +286,8 @@ void DG_DrawFrame(void)
         if (sample_count < FPS_AVG_WINDOW) sample_count++;
         if (rolling_sum > 0) {
             uint64_t avg_delta = rolling_sum / sample_count;
-            fps_scaled = (uint32_t)((femtosecondsPerSecond * 10) / avg_delta);
+            if (avg_delta > 0)
+                fps_scaled = (uint32_t)((femtosecondsPerSecond * 10) / avg_delta);
         }
     }
     last_frame_fs = current_fs_now;
@@ -364,12 +367,24 @@ void DG_DrawFrame(void)
 }
 
 void DG_SleepMs(uint32_t ms) {
-    uint64_t target = dg_now_fs() + (uint64_t)ms * femtosecondsPerMillisecond;
+    uint64_t start = dg_now_fs();
+    if (!start)
+        return;
+
+    uint64_t target = start + (uint64_t)ms * femtosecondsPerMillisecond;
     while (dg_now_fs() < target) { }
 }
 
 uint32_t DG_GetTicksMs(void) {
-    return (uint32_t)((dg_now_fs() - start_fs) / femtosecondsPerMillisecond);
+    static uint32_t fallback_ms = 0;
+    uint64_t now_fs = dg_now_fs();
+
+    if (!now_fs)
+        return fallback_ms++;
+    if (!start_fs || now_fs < start_fs)
+        start_fs = now_fs;
+
+    return (uint32_t)((now_fs - start_fs) / femtosecondsPerMillisecond);
 }
 
 int DG_GetKey(int* pressed, unsigned char* doomKey) {
