@@ -9,7 +9,6 @@
 #include <syscalls/open.h>
 #include <syscalls/read.h>
 #include <syscalls/ioctl.h>
-#include <syscalls/close.h>
 #include <devices/hpet.h>
 #include <graphics/display.h>
 #include <string.h>
@@ -25,13 +24,6 @@
 
 #define TTY_IOCTL_SET_FLAGS  0x5402
 #define TTY_FLAGS_DOOM (TTY_NONBLOCK)
-
-#ifndef FB_IOC_ACQUIRE
-#define FB_IOC_ACQUIRE  0x5003
-#endif
-#ifndef FB_IOC_RELEASE
-#define FB_IOC_RELEASE  0x5004
-#endif
 
 #ifndef DG_HAS_MOUSE_HEADER
 typedef struct {
@@ -55,7 +47,6 @@ static int tty_fd = -1;
 static int mouse_fd = -1;
 static int hpet_fd = -2;
 static int fb_fd = -1;
-static int fb_acquired = 0;
 
 static keyboard_event_t key_event;
 static uint64_t start_fs = 0;
@@ -63,19 +54,6 @@ static int mouse_debug_dx = 0;
 static int mouse_debug_dy = 0;
 static int mouse_debug_buttons = 0;
 static uint64_t mouse_debug_last_fs = 0;
-
-static void dg_release_fb(void)
-{
-    if (fb_fd >= 0 && fb_acquired) {
-        (void)_ioctl(fb_fd, FB_IOC_RELEASE, NULL);
-        fb_acquired = 0;
-    }
-
-    if (fb_fd >= 0) {
-        _close(fb_fd);
-        fb_fd = -1;
-    }
-}
 
 static uint64_t dg_now_fs(void)
 {
@@ -274,25 +252,9 @@ void DG_Init(void)
 
     fb_fd = _open("/dev/fb0", O_RDWR);
     if (fb_fd < 0) { fb0 = NULL; return; }
-
-    if (_ioctl(fb_fd, FB_IOC_ACQUIRE, NULL) < 0) {
-        dg_release_fb();
-        fb0 = NULL;
-        return;
-    }
-    fb_acquired = 1;
-
-    if (_ioctl(fb_fd, FB_IOC_GET_INFO, &fb_info_local) < 0) {
-        dg_release_fb();
-        fb0 = NULL;
-        return;
-    }
+    if (_ioctl(fb_fd, FB_IOC_GET_INFO, &fb_info_local) < 0) { fb0 = NULL; return; }
 
     fb0 = (uint32_t*)malloc(fb_info_local.height * fb_info_local.pitch);
-    if (!fb0) {
-        dg_release_fb();
-        return;
-    }
     fb_pitch_pixels = fb_info_local.pitch >> 2;
     start_fs = dg_now_fs();
     
@@ -402,8 +364,8 @@ void DG_DrawFrame(void)
         memcpy(dst + ox, line_buf + ox, rw * sizeof(uint32_t));
     }
 
-    if (fb_fd >= 0 && fb_acquired) {
-        (void)_ioctl(fb_fd, FB_IOC_FLIP, fb0);
+    if (fb_fd >= 0) {
+        _ioctl(fb_fd, FB_IOC_FLIP, fb0);
     }
 }
 
