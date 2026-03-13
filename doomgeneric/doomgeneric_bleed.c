@@ -58,6 +58,7 @@ static int mouse_fd = -1;
 static int hpet_fd = -2;
 static int fb_fd = -1;
 static int g_use_wm = 0;
+static int g_wm_requested = 0;
 #if HAVE_WM
 static wm_client g_wm;
 static wm_window g_wm_window;
@@ -74,6 +75,16 @@ static int mouse_debug_dx = 0;
 static int mouse_debug_dy = 0;
 static int mouse_debug_buttons = 0;
 static uint64_t mouse_debug_last_fs = 0;
+
+static int argv_has_wm_pid(void) {
+    if (!myargv || myargc <= 0)
+        return 0;
+    for (int i = 0; i + 1 < myargc; ++i) {
+        if (strcmp(myargv[i], "--wm-pid") == 0)
+            return 1;
+    }
+    return 0;
+}
 
 static uint64_t dg_now_fs(void)
 {
@@ -305,6 +316,7 @@ void DG_Init(void)
     mouse_fd = _open("/dev/mouse0", O_RDONLY);
 
 #if HAVE_WM
+    g_wm_requested = argv_has_wm_pid();
     uint64_t wm_pid = 0;
     if (wm_parse_args(myargc, (const char **)myargv, &wm_pid) == 0 &&
         wm_connect(&g_wm, wm_pid) == 0 &&
@@ -320,7 +332,15 @@ void DG_Init(void)
         start_fs = dg_now_fs();
         return;
     }
+#else
+    g_wm_requested = argv_has_wm_pid();
 #endif
+
+    if (g_wm_requested) {
+        printf("doom: wm requested but unavailable\n");
+        fb0 = NULL;
+        return;
+    }
 
     fb_fd = _open("/dev/fb0", O_RDWR);
     if (fb_fd < 0) { fb0 = NULL; return; }
