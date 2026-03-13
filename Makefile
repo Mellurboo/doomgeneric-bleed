@@ -9,7 +9,9 @@ CRT0        := $(LIB_DIR)/start.o
 LIBC        := $(LIB_DIR)/blibc.a
 
 BLIBC_REPO  := https://codeberg.org/Bleed-Kernel/blibc.git
-BLIBC_DIR   := external/blibc
+BLIBC_DIR   ?= ../blibc
+BLIBC_FALLBACK := external/blibc
+BLIBC_USE_DIR := $(if $(wildcard $(BLIBC_DIR)/makefile),$(BLIBC_DIR),$(BLIBC_FALLBACK))
 
 INCLUDES    := -Iinclude -Isysroot/include -Isysroot/libc
 
@@ -69,15 +71,17 @@ blibc: $(LIBC)
 
 $(LIBC):
 	@echo "[BLIBC] Preparing blibc"
-	@if [ ! -d "$(BLIBC_DIR)" ]; then \
-		git clone $(BLIBC_REPO) $(BLIBC_DIR); \
-	else \
-		cd $(BLIBC_DIR) && git pull --rebase; \
+	@if [ "$(BLIBC_USE_DIR)" = "$(BLIBC_FALLBACK)" ]; then \
+		if [ ! -d "$(BLIBC_FALLBACK)" ]; then \
+			git clone $(BLIBC_REPO) $(BLIBC_FALLBACK); \
+		else \
+			cd $(BLIBC_FALLBACK) && git pull --rebase; \
+		fi; \
 	fi
-	$(MAKE) -C $(BLIBC_DIR)
+	$(MAKE) -C $(BLIBC_USE_DIR)
 	@echo "[BLIBC] Syncing sysroot"
 	@mkdir -p sysroot
-	@cp -r $(BLIBC_DIR)/sysroot/* sysroot/
+	@cp -r $(BLIBC_USE_DIR)/sysroot/* sysroot/
 
 clean:
 	rm -rf $(BIN_DIR)
