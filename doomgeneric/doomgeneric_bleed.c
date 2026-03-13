@@ -16,7 +16,16 @@
 #include <graphics/display.h>
 #include <string.h>
 #include <stdio.h>
+#if defined(__has_include)
+#if __has_include(<wm.h>)
 #include <wm.h>
+#define HAVE_WM 1
+#endif
+#endif
+
+#ifndef HAVE_WM
+#define HAVE_WM 0
+#endif
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -49,6 +58,7 @@ static int mouse_fd = -1;
 static int hpet_fd = -2;
 static int fb_fd = -1;
 static int g_use_wm = 0;
+#if HAVE_WM
 static wm_client g_wm;
 static wm_window g_wm_window;
 static int g_wm_has_event = 0;
@@ -56,6 +66,7 @@ static wm_event g_wm_event;
 static int g_wm_mouse_x = 0;
 static int g_wm_mouse_y = 0;
 static int g_wm_buttons = 0;
+#endif
 
 static keyboard_event_t key_event;
 static uint64_t start_fs = 0;
@@ -80,6 +91,7 @@ static uint64_t dg_now_fs(void)
     return 0;
 }
 
+#if HAVE_WM
 static int wm_try_read_event(void) {
     if (!g_use_wm)
         return 0;
@@ -92,6 +104,11 @@ static int wm_try_read_event(void) {
     }
     return g_wm_has_event;
 }
+#else
+static int wm_try_read_event(void) {
+    return 0;
+}
+#endif
 
 //crude font
 
@@ -287,6 +304,7 @@ void DG_Init(void)
     set_nonblock_compat(0);
     mouse_fd = _open("/dev/mouse0", O_RDONLY);
 
+#if HAVE_WM
     uint64_t wm_pid = 0;
     if (wm_parse_args(myargc, (const char **)myargv, &wm_pid) == 0 &&
         wm_connect(&g_wm, wm_pid) == 0 &&
@@ -302,6 +320,7 @@ void DG_Init(void)
         start_fs = dg_now_fs();
         return;
     }
+#endif
 
     fb_fd = _open("/dev/fb0", O_RDWR);
     if (fb_fd < 0) { fb0 = NULL; return; }
@@ -446,6 +465,7 @@ uint32_t DG_GetTicksMs(void) {
 }
 
 int DG_GetKey(int* pressed, unsigned char* doomKey) {
+#if HAVE_WM
     if (g_use_wm) {
         if (!wm_try_read_event())
             return 0;
@@ -463,6 +483,7 @@ int DG_GetKey(int* pressed, unsigned char* doomKey) {
         }
         return 0;
     }
+#endif
     if (_read(0, &key_event, sizeof(key_event)) != (int)sizeof(key_event)) return 0;
     unsigned char key = map_key(&key_event);
     if (key == 0) return 0;
@@ -472,6 +493,7 @@ int DG_GetKey(int* pressed, unsigned char* doomKey) {
 }
 
 int DG_GetMouse(int *buttons, int *dx, int *dy) {
+#if HAVE_WM
     if (g_use_wm) {
         if (!wm_try_read_event())
             return 0;
@@ -496,6 +518,7 @@ int DG_GetMouse(int *buttons, int *dx, int *dy) {
         }
         return 0;
     }
+#endif
     mouse_event_t mouse_event;
     int doom_buttons = 0;
 

@@ -69,7 +69,9 @@ $(OBJ_DIR)/%.o: doomgeneric/%.c
 
 blibc: $(LIBC)
 
-$(LIBC):
+FORCE:
+
+$(LIBC): FORCE
 	@echo "[BLIBC] Preparing blibc"
 	@if [ "$(BLIBC_USE_DIR)" = "$(BLIBC_FALLBACK)" ]; then \
 		if [ ! -d "$(BLIBC_FALLBACK)" ]; then \
@@ -89,4 +91,4 @@ clean:
 distclean:
 	rm -rf $(BIN_DIR) sysroot external
 
-.PHONY: all clean distclean blibc
+.PHONY: all clean distclean blibc FORCE
