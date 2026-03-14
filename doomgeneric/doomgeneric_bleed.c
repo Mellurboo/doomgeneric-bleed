@@ -1,14 +1,11 @@
 #include "doomgeneric.h"
 #include "doomkeys.h"
-#include "m_argv.h"
 
 #include <stdlib.h>
 #include <stdint.h>
 
 #include <fs/file.h>
 #include <devices/keyboard.h>
-#include <devices/console.h>
-#include <fcntl.h>
 #include <syscalls/open.h>
 #include <syscalls/read.h>
 #include <syscalls/ioctl.h>
@@ -16,15 +13,17 @@
 #include <graphics/display.h>
 #include <string.h>
 #include <stdio.h>
-#include <wm.h>
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
 
-#ifndef TTY_IOCTL_FIONBIO
-#define TTY_IOCTL_FIONBIO 0x5421
-#endif
+#define TTY_ECHO         (1 << 1)
+#define TTY_CANNONICAL   (1 << 2)
+#define TTY_NONBLOCK     (1 << 4)
+
+#define TTY_IOCTL_SET_FLAGS  0x5402
+#define TTY_FLAGS_DOOM (TTY_NONBLOCK)
 
 #ifndef DG_HAS_MOUSE_HEADER
 typedef struct {
@@ -48,14 +47,6 @@ static int tty_fd = -1;
 static int mouse_fd = -1;
 static int hpet_fd = -2;
 static int fb_fd = -1;
-static int g_use_wm = 0;
-static wm_client g_wm;
-static wm_window g_wm_window;
-static int g_wm_has_event = 0;
-static wm_event g_wm_event;
-static int g_wm_mouse_x = 0;
-static int g_wm_mouse_y = 0;
-static int g_wm_buttons = 0;
 
 static keyboard_event_t key_event;
 static uint64_t start_fs = 0;
@@ -78,19 +69,6 @@ static uint64_t dg_now_fs(void)
     if (_read(hpet_fd, &now, sizeof(now)) == (long)sizeof(now))
         return now;
     return 0;
-}
-
-static int wm_try_read_event(void) {
-    if (!g_use_wm)
-        return 0;
-    if (!g_wm_has_event) {
-        wm_event ev;
-        if (wm_poll_event(&g_wm, &g_wm_window, &ev) == 0 && ev.type != WM_EVENT_NONE) {
-            g_wm_event = ev;
-            g_wm_has_event = 1;
-        }
-    }
-    return g_wm_has_event;
 }
 
 //crude font
@@ -264,44 +242,13 @@ static unsigned char map_key(const keyboard_event_t* ev)
     return (unsigned char)ascii;
 }
 
-static void set_nonblock_compat(int fd)
-{
-    if (fd < 0)
-        return;
-
-    if (fcntl(fd, F_SETFL, O_NONBLOCK) == 0)
-        return;
-
-    int one = 1;
-    if (_ioctl(fd, TTY_IOCTL_FIONBIO, &one) == 0)
-        return;
-
-    uint32_t flags = TTY_NONBLOCK;
-    (void)_ioctl(fd, TTY_IOCTL_SET_FLAGS, &flags);
-}
-
 void DG_Init(void)
 {
+    uint32_t flags = TTY_FLAGS_DOOM;
     tty_fd = _open("/dev/tty0", O_RDWR);
-    set_nonblock_compat(tty_fd);
-    set_nonblock_compat(0);
+    if (tty_fd >= 0) _ioctl(tty_fd, TTY_IOCTL_SET_FLAGS, &flags);
+    _ioctl(0, TTY_IOCTL_SET_FLAGS, &flags);
     mouse_fd = _open("/dev/mouse0", O_RDONLY);
-
-    uint64_t wm_pid = 0;
-    if (wm_parse_args(myargc, (const char **)myargv, &wm_pid) == 0 &&
-        wm_connect(&g_wm, wm_pid) == 0 &&
-        wm_create_window(&g_wm, "Doom", 800, 600, &g_wm_window) == 0) {
-        g_use_wm = 1;
-        fb0 = g_wm_window.pixels;
-        fb_info_local.width = g_wm_window.width;
-        fb_info_local.height = g_wm_window.height;
-        fb_info_local.pitch = g_wm_window.width * 4;
-        fb_pitch_pixels = g_wm_window.width;
-        g_wm_mouse_x = (int)g_wm_window.width / 2;
-        g_wm_mouse_y = (int)g_wm_window.height / 2;
-        start_fs = dg_now_fs();
-        return;
-    }
 
     fb_fd = _open("/dev/fb0", O_RDWR);
     if (fb_fd < 0) { fb0 = NULL; return; }
@@ -446,23 +393,6 @@ uint32_t DG_GetTicksMs(void) {
 }
 
 int DG_GetKey(int* pressed, unsigned char* doomKey) {
-    if (g_use_wm) {
-        if (!wm_try_read_event())
-            return 0;
-        if (g_wm_event.type == WM_EVENT_KEY_DOWN || g_wm_event.type == WM_EVENT_KEY_UP) {
-            *pressed = (g_wm_event.type == WM_EVENT_KEY_DOWN);
-            *doomKey = (unsigned char)g_wm_event.key;
-            g_wm_has_event = 0;
-            return 1;
-        }
-        if (g_wm_event.type == WM_EVENT_TEXT_INPUT) {
-            *pressed = 1;
-            *doomKey = (unsigned char)g_wm_event.text;
-            g_wm_has_event = 0;
-            return 1;
-        }
-        return 0;
-    }
     if (_read(0, &key_event, sizeof(key_event)) != (int)sizeof(key_event)) return 0;
     unsigned char key = map_key(&key_event);
     if (key == 0) return 0;
@@ -472,30 +402,6 @@ int DG_GetKey(int* pressed, unsigned char* doomKey) {
 }
 
 int DG_GetMouse(int *buttons, int *dx, int *dy) {
-    if (g_use_wm) {
-        if (!wm_try_read_event())
-            return 0;
-        if (g_wm_event.type == WM_EVENT_MOUSE_MOVE ||
-            g_wm_event.type == WM_EVENT_MOUSE_DOWN ||
-            g_wm_event.type == WM_EVENT_MOUSE_UP) {
-            int nx = g_wm_event.mouse_x;
-            int ny = g_wm_event.mouse_y;
-            *dx = nx - g_wm_mouse_x;
-            *dy = ny - g_wm_mouse_y;
-            g_wm_mouse_x = nx;
-            g_wm_mouse_y = ny;
-
-            if (g_wm_event.type == WM_EVENT_MOUSE_DOWN)
-                g_wm_buttons |= MOUSE_BTN_LEFT;
-            if (g_wm_event.type == WM_EVENT_MOUSE_UP)
-                g_wm_buttons &= ~MOUSE_BTN_LEFT;
-
-            *buttons = g_wm_buttons ? 1 : 0;
-            g_wm_has_event = 0;
-            return 1;
-        }
-        return 0;
-    }
     mouse_event_t mouse_event;
     int doom_buttons = 0;
 
