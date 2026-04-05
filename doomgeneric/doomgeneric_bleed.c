@@ -248,7 +248,7 @@ void DG_Init(void)
     tty_fd = _open("/dev/tty0", O_RDWR);
     if (tty_fd >= 0) _ioctl(tty_fd, TTY_IOCTL_SET_FLAGS, &flags);
     _ioctl(0, TTY_IOCTL_SET_FLAGS, &flags);
-    mouse_fd = _open("/dev/mouse0", O_RDONLY);
+    mouse_fd = _open("/dev/mouse", O_RDONLY);
 
     fb_fd = _open("/dev/fb0", O_RDWR);
     if (fb_fd < 0) { fb0 = NULL; return; }
