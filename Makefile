@@ -24,7 +24,7 @@ CFLAGS := \
 	-nostdlib \
 	-nostdinc \
 	-no-pie \
-	-mavx2 \
+	-msse4.2 \
 	$(INCLUDES)
 
 LDFLAGS := \
